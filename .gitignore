@@ -1,0 +1,13 @@
+.idea
+.idea
+
+.DS_store
+
+
+.venv
+data/dev.json
+data/test.json
+data/train.json
+data/wiki_musique_corpus.json
+.venv
+.venv1data/

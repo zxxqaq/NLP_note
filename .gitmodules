@@ -1,0 +1,3 @@
+[submodule "DEXTER-macos"]
+	path = DEXTER-macos
+	url = https://github.com/itsMatoosh/DEXTER-macos.git
