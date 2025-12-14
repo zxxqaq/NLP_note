@@ -1,15 +1,20 @@
 """
-Evaluate retrieval results with top-1 context + random context.
+Evaluate retrieval results with top-k contexts + random contexts.
 
 This script:
 1. Loads retrieval results (question_id -> context_id with scores)
-2. For each question, finds the top-1 context (highest score)
-3. Randomly selects one unrelated context from corpus (different from top-1)
-4. Combines top-1 context + random context as input
+2. For each question, finds the top-k contexts (highest scores)
+3. Randomly selects k unrelated contexts from corpus (different from top-k)
+4. Combines top-k contexts + random contexts as input
 5. Retrieves question from dev_1200.json
 6. Generates answer using Mistral API
 7. Evaluates using Exact Match and Cover Exact Match metrics
 8. Outputs detailed results report
+
+Supports three configurations:
+- top1 + random1: --top_k 1 --random_k 1
+- top3 + random1: --top_k 3 --random_k 1
+- top3 + random3: --top_k 3 --random_k 3
 """
 
 import json
@@ -17,7 +22,15 @@ import os
 import sys
 import random
 from typing import Dict, List, Optional, Tuple
-from tqdm import tqdm
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    # Fallback if tqdm is not available
+    def tqdm(iterable, desc=None, **kwargs):
+        if desc:
+            print(desc)
+        return iterable
 
 # Add DEXTER path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'DEXTER-macos'))
@@ -142,45 +155,64 @@ def format_context_for_llm(context_data: Dict) -> str:
         return text
 
 
-def get_random_context(corpus_data: Dict[str, Dict], exclude_context_id: str, seed: Optional[int] = None) -> Tuple[str, Dict]:
-    """Get a random context from corpus, excluding the specified context_id.
+def get_random_contexts(corpus_data: Dict[str, Dict], exclude_context_ids: List[str], k: int = 1) -> List[Tuple[str, Dict]]:
+    """Get k random contexts from corpus, excluding the specified context_ids.
     
     Args:
         corpus_data: Dictionary mapping context_id to context data
-        exclude_context_id: Context ID to exclude from random selection
-        seed: Random seed for reproducibility (optional)
+        exclude_context_ids: List of context IDs to exclude from random selection
+        k: Number of random contexts to return (default: 1)
         
     Returns:
-        Tuple of (random_context_id, context_data)
+        List of tuples (random_context_id, context_data)
     """
-    if seed is not None:
-        random.seed(seed)
+    # Convert to set for faster lookup
+    exclude_set = set(exclude_context_ids)
     
-    # Get all context IDs except the excluded one
-    available_contexts = [cid for cid in corpus_data.keys() if cid != exclude_context_id]
+    # Get all context IDs except the excluded ones
+    available_contexts = [cid for cid in corpus_data.keys() if cid not in exclude_set]
     
     if not available_contexts:
-        # If no other contexts available, return None
-        return None, None
+        # If no other contexts available, return empty list
+        return []
     
-    # Randomly select one
-    random_context_id = random.choice(available_contexts)
-    random_context_data = corpus_data[random_context_id]
+    # Ensure k doesn't exceed available contexts
+    k = min(k, len(available_contexts))
     
-    return random_context_id, random_context_data
+    # Randomly select k contexts without replacement
+    selected_ids = random.sample(available_contexts, k)
+    
+    # Return list of tuples
+    return [(cid, corpus_data[cid]) for cid in selected_ids]
 
 
-def combine_contexts(top1_context: str, random_context: str) -> str:
-    """Combine top-1 context and random context for LLM input.
+def combine_contexts(retrieved_contexts: List[str], random_contexts: List[str]) -> str:
+    """Combine retrieved contexts and random contexts for LLM input.
     
     Args:
-        top1_context: Formatted top-1 context text
-        random_context: Formatted random context text
+        retrieved_contexts: List of formatted retrieved context texts
+        random_contexts: List of formatted random context texts
         
     Returns:
         Combined context string
     """
-    return f"Relevant Context: {top1_context}\n\nUnrelated Context: {random_context}"
+    parts = []
+    
+    # Add retrieved contexts
+    if len(retrieved_contexts) == 1:
+        parts.append(f"Relevant Context: {retrieved_contexts[0]}")
+    else:
+        relevant_text = "\n\n---\n\n".join(retrieved_contexts)
+        parts.append(f"Relevant Contexts:\n{relevant_text}")
+    
+    # Add random contexts
+    if len(random_contexts) == 1:
+        parts.append(f"Unrelated Context: {random_contexts[0]}")
+    else:
+        unrelated_text = "\n\n---\n\n".join(random_contexts)
+        parts.append(f"Unrelated Contexts:\n{unrelated_text}")
+    
+    return "\n\n".join(parts)
 
 
 def generate_answer(llm_engine, question: str, context: str) -> str:
@@ -194,7 +226,7 @@ def generate_answer(llm_engine, question: str, context: str) -> str:
     Returns:
         Generated answer
     """
-    system_prompt = "You are a helpful assistant. Answer the question based on the given context. Focus on the relevant context and ignore unrelated information. Provide only the answer without additional explanation."
+    system_prompt = "You are a helpful assistant. Answer the question using the given context and your knowledge. Provide only the answer without additional explanation."
     user_prompt = f"Context: {context}\n\nQuestion: {question}\n\nAnswer:"
     
     try:
@@ -213,9 +245,11 @@ def evaluate_retrieval_with_random(
     corpus_path: str = "data/wiki_musique_corpus.json",
     output_path: str = "retrieval_with_random_evaluation_results.json",
     model_name: str = "open-mistral-7b",
+    top_k: int = 1,
+    random_k: int = 1,
     random_seed: Optional[int] = None
 ):
-    """Main evaluation function with top-1 + random context.
+    """Main evaluation function with top-k retrieved contexts + random contexts.
     
     Args:
         retrieval_path: Path to retrieval_results.json
@@ -223,10 +257,12 @@ def evaluate_retrieval_with_random(
         corpus_path: Path to wiki_musique_corpus.json
         output_path: Path to save evaluation results
         model_name: Mistral model name
+        top_k: Number of top retrieved contexts to use (default: 1)
+        random_k: Number of random unrelated contexts to use (default: 1)
         random_seed: Random seed for reproducibility (optional)
     """
     print("=" * 80)
-    print("Retrieval Results Evaluation (Top-1 + Random Context)")
+    print(f"Retrieval Results Evaluation (Top-{top_k} + {random_k} Random Context(s))")
     print("=" * 80)
     
     # Set random seed if provided
@@ -255,7 +291,7 @@ def evaluate_retrieval_with_random(
     
     # Process each question
     print(f"\nProcessing {len(retrieval_data)} questions...")
-    print("Using top-1 context + 1 random unrelated context per question")
+    print(f"Using top-{top_k} context(s) + {random_k} random unrelated context(s) per question")
     print("-" * 80)
     
     results = []
@@ -276,38 +312,50 @@ def evaluate_retrieval_with_random(
             print(f"Warning: Question or answer is empty for {question_id}, skipping")
             continue
         
-        # Get top-1 context
-        top_contexts = get_top_k_context(question_id, retrieval_data, k=1)
+        # Get top-k contexts
+        top_contexts = get_top_k_context(question_id, retrieval_data, k=top_k)
         
         if not top_contexts:
             print(f"Warning: No contexts found for question {question_id}, skipping")
             continue
         
-        top_context_id, top_score = top_contexts[0]
+        # Get top-k contexts from corpus
+        retrieved_context_ids = []
+        retrieved_context_texts = []
+        retrieved_context_data_list = []
         
-        # Get top-1 context from corpus
-        if top_context_id not in corpus_data:
-            print(f"Warning: Context ID {top_context_id} not found in corpus, skipping")
+        for context_id, score in top_contexts:
+            if context_id not in corpus_data:
+                print(f"Warning: Context ID {context_id} not found in corpus, skipping this context")
+                continue
+            
+            context_data = corpus_data[context_id]
+            context_text = format_context_for_llm(context_data)
+            retrieved_context_ids.append(context_id)
+            retrieved_context_texts.append(context_text)
+            retrieved_context_data_list.append(context_data)
+        
+        if not retrieved_context_texts:
+            print(f"Warning: No valid retrieved contexts for question {question_id}, skipping")
             continue
         
-        top1_context_data = corpus_data[top_context_id]
-        top1_context_text = format_context_for_llm(top1_context_data)
-        
-        # Get random unrelated context
-        random_context_id, random_context_data = get_random_context(
-            corpus_data, 
-            exclude_context_id=top_context_id,
-            seed=random_seed
+        # Get random unrelated contexts
+        random_contexts_list = get_random_contexts(
+            corpus_data,
+            exclude_context_ids=retrieved_context_ids,
+            k=random_k
         )
         
-        if random_context_id is None:
-            print(f"Warning: Could not find random context for question {question_id}, skipping")
+        if len(random_contexts_list) < random_k:
+            print(f"Warning: Could not find enough random contexts for question {question_id} (found {len(random_contexts_list)}, needed {random_k}), skipping")
             continue
         
-        random_context_text = format_context_for_llm(random_context_data)
+        # Format random contexts
+        random_context_texts = [format_context_for_llm(context_data) for _, context_data in random_contexts_list]
+        random_context_ids = [context_id for context_id, _ in random_contexts_list]
         
         # Combine contexts
-        combined_context = combine_contexts(top1_context_text, random_context_text)
+        combined_context = combine_contexts(retrieved_context_texts, random_context_texts)
         
         # Generate answer
         predicted_answer = generate_answer(llm_engine, question, combined_context)
@@ -331,13 +379,13 @@ def evaluate_retrieval_with_random(
         result = {
             "question_id": question_id,
             "question": question,
-            "top1_context_id": top_context_id,
-            "top1_context_title": top1_context_data.get("title", ""),
-            "top1_context_text": top1_context_text,
-            "top1_retrieval_score": top_score,
-            "random_context_id": random_context_id,
-            "random_context_title": random_context_data.get("title", ""),
-            "random_context_text": random_context_text,
+            "retrieved_context_ids": retrieved_context_ids,
+            "retrieved_context_titles": [ctx.get("title", "") for ctx in retrieved_context_data_list],
+            "retrieved_context_texts": retrieved_context_texts,
+            "retrieved_scores": [score for _, score in top_contexts[:len(retrieved_context_ids)]],
+            "random_context_ids": random_context_ids,
+            "random_context_titles": [corpus_data[cid].get("title", "") for cid in random_context_ids],
+            "random_context_texts": random_context_texts,
             "combined_context": combined_context,
             "predicted_answer": predicted_answer,
             "gold_answer": gold_answer,
@@ -360,14 +408,15 @@ def evaluate_retrieval_with_random(
     
     # Prepare output
     output = {
-        "experiment_name": "Retrieval Results Evaluation (Top-1 + Random Context)",
-        "experiment_description": "Evaluate top-1 retrieved context + random unrelated context using Mistral API",
+        "experiment_name": f"Retrieval Results Evaluation (Top-{top_k} + {random_k} Random Context(s))",
+        "experiment_description": f"Evaluate top-{top_k} retrieved context(s) + {random_k} random unrelated context(s) using Mistral API",
         "model": {
             "name": model_name,
             "type": "Mistral API"
         },
         "retrieval_config": {
-            "top_k": 1,
+            "top_k": top_k,
+            "random_k": random_k,
             "random_context": True,
             "random_seed": random_seed,
             "retrieval_file": retrieval_path
@@ -412,14 +461,22 @@ if __name__ == "__main__":
                         help="Path to dev_1200.json")
     parser.add_argument("--corpus_path", type=str, default="data/wiki_musique_corpus.json",
                         help="Path to wiki_musique_corpus.json")
-    parser.add_argument("--output_path", type=str, default="retrieval_with_random_evaluation_results.json",
-                        help="Path to save evaluation results")
+    parser.add_argument("--output_path", type=str, default=None,
+                        help="Path to save evaluation results (default: auto-generated based on top_k and random_k)")
     parser.add_argument("--model_name", type=str, default="open-mistral-7b",
                         help="Mistral model name (e.g., 'open-mistral-7b' for Mistral API or 'mistralai/Mistral-7B-Instruct-v0.1' for Hugging Face)")
+    parser.add_argument("--top_k", type=int, default=1,
+                        help="Number of top retrieved contexts to use (default: 1)")
+    parser.add_argument("--random_k", type=int, default=1,
+                        help="Number of random unrelated contexts to use (default: 1)")
     parser.add_argument("--random_seed", type=int, default=None,
                         help="Random seed for reproducibility (optional)")
     
     args = parser.parse_args()
+    
+    # Auto-generate output path if not specified
+    if args.output_path is None:
+        args.output_path = f"data/q3_top_{args.top_k}_mix_random_{args.random_k}_results.json"
     
     evaluate_retrieval_with_random(
         retrieval_path=args.retrieval_path,
@@ -427,6 +484,8 @@ if __name__ == "__main__":
         corpus_path=args.corpus_path,
         output_path=args.output_path,
         model_name=args.model_name,
+        top_k=args.top_k,
+        random_k=args.random_k,
         random_seed=args.random_seed
     )
 

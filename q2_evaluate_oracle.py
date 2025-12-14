@@ -13,7 +13,15 @@ import json
 import os
 import sys
 from typing import Dict, List, Optional
-from tqdm import tqdm
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    # Fallback if tqdm is not available
+    def tqdm(iterable, desc=None, **kwargs):
+        if desc:
+            print(desc)
+        return iterable
 
 # Add DEXTER path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'DEXTER-macos'))
@@ -82,7 +90,7 @@ def generate_answer(llm_engine, question: str, context: str) -> str:
     Returns:
         Generated answer
     """
-    system_prompt = "You are a helpful assistant. Answer the question based on the given context. Provide only the answer without additional explanation."
+    system_prompt = "You are a helpful assistant. Answer the question using the given context and your knowledge. Provide only the answer without additional explanation."
     user_prompt = f"Context: {context}\n\nQuestion: {question}\n\nAnswer:"
     
     try:
@@ -260,7 +268,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate using context from dev_1200.json")
     parser.add_argument("--dev_path", type=str, default="data/dev_1200.json",
                         help="Path to dev_1200.json")
-    parser.add_argument("--output_path", type=str, default="dev_context_evaluation_results.json",
+    parser.add_argument("--output_path", type=str, default="data/q2_oracle_results.json",
                         help="Path to save evaluation results")
     parser.add_argument("--model_name", type=str, default="open-mistral-7b",
                         help="Mistral model name (e.g., 'open-mistral-7b' for Mistral API or 'mistralai/Mistral-7B-Instruct-v0.1' for Hugging Face)")
