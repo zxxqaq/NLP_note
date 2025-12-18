@@ -387,7 +387,7 @@ if __name__ == "__main__":
                         help="Path to wiki_musique_corpus.json")
     parser.add_argument("--output_path", type=str, default=None,
                         help="Path to save evaluation results (default: auto-generated based on top_k)")
-    parser.add_argument("--model_name", type=str, default="open-mistral-7b",
+    parser.add_argument("--model_name", type=str, default="mistral-large-latest",
                         help="Mistral model name (e.g., 'open-mistral-7b' for Mistral API or 'mistralai/Mistral-7B-Instruct-v0.1' for Hugging Face)")
     parser.add_argument("--top_k", type=int, default=3,
                         help="Number of top contexts to use (default: 3)")

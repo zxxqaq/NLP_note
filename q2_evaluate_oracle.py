@@ -270,7 +270,7 @@ if __name__ == "__main__":
                         help="Path to dev_1200.json")
     parser.add_argument("--output_path", type=str, default="data/q2_oracle_results.json",
                         help="Path to save evaluation results")
-    parser.add_argument("--model_name", type=str, default="open-mistral-7b",
+    parser.add_argument("--model_name", type=str, default="mistral-large-latest",
                         help="Mistral model name (e.g., 'open-mistral-7b' for Mistral API or 'mistralai/Mistral-7B-Instruct-v0.1' for Hugging Face)")
     
     args = parser.parse_args()
